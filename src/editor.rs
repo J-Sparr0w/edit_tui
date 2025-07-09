@@ -1,10 +1,9 @@
-use std::io::{Write, stdout};
-
-use crossterm::{
-    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, read},
-    execute,
-    terminal::Clear,
+use crate::command::*;
+use crate::{
+    command::{ClearType, Command},
+    sys,
 };
+use std::io::{Write, stdout};
 
 #[derive(Default)]
 pub struct Editor {
@@ -17,33 +16,43 @@ impl Editor {
     }
 
     pub fn run(&mut self) {
-        Self::initialize().unwrap();
+        Self::initialize();
         let result = self.repl();
         Self::terminate().unwrap();
         result.unwrap();
-        print!("Exiting...Goodbye. \r\n");
+        print!("\nExiting...Goodbye. \r\n");
     }
 
-    fn initialize() -> Result<(), std::io::Error> {
-        crossterm::terminal::enable_raw_mode()?;
-        Self::clear_screen()
+    fn initialize() -> anyhow::Result<()> {
+        // crossterm::terminal::enable_raw_mode()?;
+        sys::initialize()?;
+        Self::clear_screen();
+        Ok(())
     }
 
-    fn terminate() -> Result<(), std::io::Error> {
-        Ok(crossterm::terminal::disable_raw_mode()?)
+    fn terminate() -> anyhow::Result<()> {
+        Ok(sys::deinit()?)
     }
 
-    fn clear_screen() -> std::io::Result<()> {
-        let mut stdout = std::io::stdout();
-        execute!(stdout, Clear(crossterm::terminal::ClearType::All))
+    fn clear_screen() -> () {
+        sys::ConsoleState::queue(Clear(ClearType::All));
     }
 
-    fn refresh_screen(&self) -> std::io::Result<()> {
-        stdout().flush()?;
+    fn refresh_screen(&self) -> anyhow::Result<()> {
+        sys::flush()?;
         Ok(())
     }
 
     fn repl(&mut self) -> Result<(), std::io::Error> {
+        let mut stdout = stdout();
+        let screen_height = crossterm::terminal::size()?;
+
+        for i in 0..screen_height.1 - 1 {
+            print!("~");
+            print!("\r\n");
+        }
+        sys::ConsoleState::queue(MoveTo::new(0, 0));
+
         loop {
             let event = read()?;
             self.event_handler(&event);
