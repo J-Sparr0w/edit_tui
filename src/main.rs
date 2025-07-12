@@ -8,6 +8,8 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> std::process::ExitCode {
     let mut editor = Editor::new();
-    editor.run();
-    ExitCode::SUCCESS
+    match editor.run() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
+    }
 }

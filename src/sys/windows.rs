@@ -1,7 +1,7 @@
 use std::{
     ffi::c_void,
     fmt::Write,
-    io::stdout,
+    io::{Write as W, stdout},
     mem::MaybeUninit,
     os::windows::io::AsHandle,
     ptr::{self, null, null_mut},
@@ -15,11 +15,12 @@ use windows_sys::{
         Storage::FileSystem,
         System::{
             Console::{
-                self, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_EXTENDED_FLAGS, ENABLE_PROCESSED_OUTPUT,
-                ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-                ENABLE_WINDOW_INPUT, ENABLE_WRAP_AT_EOL_OUTPUT, GetConsoleCP, GetConsoleMode,
-                GetConsoleOutputCP, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
-                ReadConsoleA, ReadConsoleInputA, SetConsoleMode,
+                self, CONSOLE_SCREEN_BUFFER_INFO, COORD, DISABLE_NEWLINE_AUTO_RETURN,
+                ENABLE_EXTENDED_FLAGS, ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+                ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, ENABLE_WRAP_AT_EOL_OUTPUT,
+                GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo,
+                GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD, ReadConsoleA,
+                ReadConsoleInputA, SetConsoleMode,
             },
             Diagnostics::Debug::OutputDebugStringA,
             IO::CancelIoEx,
@@ -47,7 +48,6 @@ pub struct ConsoleState {
     old_stdout_mode: u32,
     stdin_cp_old: u32,
     stdout_cp_old: u32,
-    queue: String,
 }
 
 impl ConsoleState {
@@ -62,17 +62,31 @@ impl ConsoleState {
         }
     }
 
-    pub fn queue(cmd: impl Command) {
+    pub fn size() -> Result<COORD, ConsoleError> {
+        // the coordinates of a character cell in a console screen buffer. The origin of the coordinate system (0,0) is at the top, left cell of the buffer.
+        // X
+        // The horizontal coordinate or column value. The units depend on the function call.
+
+        // Y
+        // The vertical coordinate or row value. The units depend on the function call.
+
+        let size;
         unsafe {
-            cmd.write_ansi(&mut GLOBAL_CONSOLE_STATE.queue);
+            let mut screen_buffer_info: CONSOLE_SCREEN_BUFFER_INFO =
+                CONSOLE_SCREEN_BUFFER_INFO::default();
+            check_nonzero_success(GetConsoleScreenBufferInfo(
+                GLOBAL_CONSOLE_STATE.stdout,
+                &mut screen_buffer_info,
+            ))?;
+            size = screen_buffer_info.dwSize;
         }
+        Ok(size)
     }
 }
 
 static mut GLOBAL_CONSOLE_STATE: ConsoleState = ConsoleState {
     stdin: null_mut(),
     stdout: null_mut(),
-    queue: String::new(),
     old_stdin_mode: INVALID_CONSOLE_MODE,
     old_stdout_mode: INVALID_CONSOLE_MODE,
     stdin_cp_old: 0,
@@ -80,12 +94,12 @@ static mut GLOBAL_CONSOLE_STATE: ConsoleState = ConsoleState {
 };
 
 pub fn initialize() -> Result<(), ConsoleError> {
-    init()?;
+    init_std()?;
     enable_raw_mode()?;
     Ok(())
 }
 
-pub fn init() -> Result<(), ConsoleError> {
+pub fn init_std() -> Result<(), ConsoleError> {
     unsafe {
         GLOBAL_CONSOLE_STATE.stdin = GetStdHandle(Console::STD_INPUT_HANDLE);
         GLOBAL_CONSOLE_STATE.stdout = GetStdHandle(Console::STD_OUTPUT_HANDLE);
@@ -161,11 +175,11 @@ pub fn enable_raw_mode() -> Result<(), ConsoleError> {
     Ok(())
 }
 
-pub fn flush() -> Result<(), ConsoleError> {
+pub fn flush(text: &str) -> Result<(), ConsoleError> {
     let mut chars_written: u32 = 0;
 
     unsafe {
-        let queue_len = GLOBAL_CONSOLE_STATE.queue.len();
+        let queue_len = text.len();
         let mut offset = 0;
 
         if queue_len == 0 {
@@ -177,7 +191,7 @@ pub fn flush() -> Result<(), ConsoleError> {
             //WriteConsoleA might probably work fine.
             if check_nonzero_success(FileSystem::WriteFile(
                 GLOBAL_CONSOLE_STATE.stdout,
-                GLOBAL_CONSOLE_STATE.queue.as_ptr().add(offset),
+                text.as_ptr().add(offset),
                 queue_len as u32,
                 &mut chars_written,
                 null_mut(),
@@ -195,7 +209,7 @@ pub fn flush() -> Result<(), ConsoleError> {
 }
 
 pub fn read() -> Result<Vec<Event>, ConsoleError> {
-    const LEN: u32 = 128;
+    const LEN: u32 = 1024;
     let mut total_events_read: u32 = 0;
     let mut unread_events = 0;
     let mut buf = Vec::new();
@@ -220,6 +234,12 @@ pub fn read() -> Result<Vec<Event>, ConsoleError> {
                 Console::KEY_EVENT => {
                     let event = input.Event.KeyEvent;
                     let ch = event.uChar.UnicodeChar;
+                    //bKeyDown : If the key is pressed, this member is TRUE. Otherwise, this member is FALSE (the key is released).
+                    if event.bKeyDown != 0 && ch != 0 {
+                        if let Some(ch) = char::from_u32(ch as u32) {
+                            events.push(Event::Key(ch));
+                        }
+                    }
                 }
                 Console::WINDOW_BUFFER_SIZE_EVENT => {}
                 _ => {}
