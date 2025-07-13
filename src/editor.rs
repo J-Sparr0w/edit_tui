@@ -1,8 +1,9 @@
 use crate::command::*;
 use crate::command::{ClearType, Command};
-use crate::event::Event;
+use crate::event::{Event, KeyPressState};
 use crate::terminal::Terminal;
 use std::io::{Write, stdout};
+use std::time::Duration;
 
 #[derive(Default)]
 pub struct Editor {
@@ -19,7 +20,7 @@ impl Editor {
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        self.initialize();
+        self.clear_screen()?;
         let result = self.repl();
         self.terminate().unwrap();
         result.unwrap();
@@ -27,18 +28,13 @@ impl Editor {
         Ok(())
     }
 
-    fn initialize(&mut self) -> anyhow::Result<()> {
-        // crossterm::terminal::enable_raw_mode()?;
-        self.clear_screen();
-        Ok(())
-    }
-
     fn terminate(&self) -> anyhow::Result<()> {
         Ok(self.terminal.deinitialize()?)
     }
 
-    fn clear_screen(&mut self) -> () {
-        self.terminal.queue_cmd(Clear(ClearType::All));
+    fn clear_screen(&mut self) -> anyhow::Result<()> {
+        self.terminal.queue_cmd(Clear(ClearType::All))?;
+        Ok(())
     }
 
     fn refresh_screen(&mut self) -> anyhow::Result<()> {
@@ -49,14 +45,15 @@ impl Editor {
     fn repl(&mut self) -> anyhow::Result<()> {
         let screen_height = self.terminal.get_size()?.y;
         for _ in 0..screen_height - 1 {
-            print!("~");
-            print!("\r\n");
+            self.terminal.write_str_to_queue("~\r\n")?;
         }
-        self.terminal.queue_cmd(MoveTo::new(0, 0));
+        self.terminal.queue_cmd(MoveTo::new(0, 0))?;
 
+        let timeout = Duration::from_millis(100);
         loop {
+            std::thread::sleep(timeout);
             let event = self.terminal.read()?;
-            self.event_handler(&event);
+            let _ = self.event_handler(&event);
             self.refresh_screen()?;
             if self.wants_exit {
                 break;
@@ -65,11 +62,20 @@ impl Editor {
         Ok(())
     }
 
-    fn event_handler(&mut self, events: &[Event]) {
+    fn event_handler(&mut self, events: &[Event]) -> anyhow::Result<()> {
         for event in events {
-            match *event {
-                Event::Key(ch) => {
-                    self.terminal.write_char_to_queue(ch);
+            match event {
+                Event::Key {
+                    ch,
+                    modifiers,
+                    state,
+                } => {
+                    if matches!(state, KeyPressState::KeyDown) {
+                        if *ch == 'q' && modifiers.is_ctrl_pressed() {
+                            self.wants_exit = true;
+                        }
+                        self.terminal.write_char_to_queue(*ch)?;
+                    }
                 } // Event::Key(KeyEvent {
                   //     code,
                   //     modifiers,
@@ -116,5 +122,6 @@ impl Editor {
                   // _ => {}
             }
         }
+        Ok(())
     }
 }

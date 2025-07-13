@@ -1,6 +1,10 @@
 use std::fmt::Write as _;
 
-use crate::{command::Command, event::Event, sys};
+use crate::{
+    command::{CSI, Command, ESC},
+    event::Event,
+    sys,
+};
 
 #[derive(Debug, Default)]
 pub struct Terminal {
@@ -15,9 +19,17 @@ pub struct TerminalSize {
 impl Terminal {
     pub fn new() -> anyhow::Result<Self> {
         sys::initialize()?;
+        Self::use_alternate_buffer()?;
         Ok(Self {
             queue: String::new(),
         })
+    }
+
+    pub fn use_alternate_buffer() -> anyhow::Result<()> {
+        //ESC[?1049h 	Use Alternate Screen Buffer 	Switches to a new alternate screen buffer.
+        // ESC[?1049l 	Use Main Screen Buffer 	Switches to the main buffer.
+        let command = constcat::concat!(CSI, "?1049h");
+        Ok(sys::write_stdout(command)?)
     }
 
     pub fn deinitialize(&self) -> anyhow::Result<()> {
@@ -25,16 +37,16 @@ impl Terminal {
         Ok(())
     }
 
-    pub fn queue_cmd(&mut self, cmd: impl Command) {
-        cmd.write_ansi(&mut self.queue);
+    pub fn queue_cmd(&mut self, cmd: impl Command) -> anyhow::Result<()> {
+        Ok(cmd.write_ansi(&mut self.queue)?)
     }
 
-    pub fn write_str_to_queue(&mut self, text: &str) {
-        self.queue.write_str(text);
+    pub fn write_str_to_queue(&mut self, text: &str) -> anyhow::Result<()> {
+        Ok(self.queue.write_str(text)?)
     }
 
-    pub fn write_char_to_queue(&mut self, ch: char) {
-        self.queue.write_char(ch);
+    pub fn write_char_to_queue(&mut self, ch: char) -> anyhow::Result<()> {
+        Ok(self.queue.write_char(ch)?)
     }
 
     pub fn read(&self) -> anyhow::Result<Vec<Event>> {
@@ -42,7 +54,9 @@ impl Terminal {
     }
 
     pub fn flush(&mut self) -> anyhow::Result<()> {
-        Ok(sys::flush(&self.queue)?)
+        sys::write_stdout(&self.queue)?;
+        self.queue.clear();
+        Ok(())
     }
 
     pub fn get_size(&self) -> anyhow::Result<TerminalSize> {
